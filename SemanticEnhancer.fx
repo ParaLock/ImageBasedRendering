@@ -1,5 +1,7 @@
 #include "ReShadeUI.fxh"
 
+//GaussanBlur credit goes to: https://github.com/crosire/reshade-shaders/blob/master/Shaders/GaussianBlur.fx
+
 uniform float3 GrayscaleWeights <
 	ui_tooltip = "Grayscale rgb weights";
 	ui_type = "slider";
@@ -71,16 +73,15 @@ uniform float RegionBLumScale <
 > = float(1.0);
 
 //---------- Region A Params END ----------
-
-uniform bool EnableSegmentationDebug
-<
-	ui_tooltip = "Enable segmentation debug!";
-> = false;
-
 uniform bool EnableLuminanceDebug
 <
 	ui_tooltip = "Enable Luminance debug!";
 > = false;
+
+uniform float GaussianBlurStrength < __UNIFORM_SLIDER_FLOAT1
+	ui_min = 0.00; ui_max = 1.00;
+	ui_tooltip = "Adjusts the strength of blue.";
+> = 0.300;
 
 #include "ReShade.fxh"
 
@@ -104,90 +105,55 @@ sampler LuminanceSampler {
 	Texture = LuminanceTex;
 };
 
-texture FilteringTex {
-	Width = BUFFER_WIDTH;
-	Height = BUFFER_HEIGHT; 
-	Format = RGBA32F;
-};
-
-sampler FilteringSampler {
-	Texture = FilteringTex;
-};
 
 float4 SegmentationPass(in float4 pos : SV_Position, in float2 texcoord : TEXCOORD) : COLOR
 {
 	float3 color = tex2D(ReShade::BackBuffer, texcoord).rgb;
 	float lum = (GrayscaleWeights.r * color.r) + (GrayscaleWeights.g * color.g) + (GrayscaleWeights.b * color.b);
+	float new_lum;
 	
 	if(lum >= RegionAStart && lum <= RegionAEnd) {
-		return float4(RegionAColor, 1.0);
+		new_lum = RegionALumScale;
 	}
 
 	if(lum >= RegionBStart && lum <= RegionBEnd) {
-		return float4(RegionBColor, 1.0);
+		new_lum = RegionBLumScale;
 	}
-	
-	return float4(color, 1.0f);
+
+	return float4(new_lum, new_lum, new_lum, 1.0f);
 }	
 
 float4 FilteringPass(in float4 pos : SV_Position, in float2 texcoord : TEXCOORD) : COLOR
 {
-	float3 color = tex2D(ReShade::BackBuffer, texcoord).rgb;
-	float3 region_id = tex2D(RegionIdSampler, texcoord).rgb;
-
-	float offsets_x[8] = { -1.0f, 0.0f, 1.0f, -1.0f, 0.0f, 1.0f, -1.0f, 0.0f, 1.0f};
-	float offsets_y[8] = { -1.0f,-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
-	float3 samples[8];
-
-	for(int i = 0; i < 8; i++) {
-		float offset_x = offsets_x[i] / BUFFER_WIDTH;
-		float offset_y = offsets_y[i] / BUFFER_HEIGHT;
-		samples[i] = tex2D(RegionIdSampler, texcoord + float2(offset_x, offset_y));
+	float3 orig_lum = tex2D(LuminanceSampler, texcoord).rgb;
+	float3 lum = tex2D(LuminanceSampler, texcoord).rgb;
+	float offset[4] = { 0.0, 1.1824255238, 3.0293122308, 5.0040701377 };
+	float weight[4] = { 0.39894, 0.2959599993, 0.0045656525, 0.00000149278686458842 };
+	
+	lum *= weight[0];
+	
+	[loop]
+	for(int i = 1; i < 4; ++i)
+	{
+		lum += tex2D(LuminanceSampler, texcoord + float2(0.0, offset[i] * BUFFER_PIXEL_SIZE.y)).rgb * weight[i];
+		lum += tex2D(LuminanceSampler, texcoord - float2(0.0, offset[i] * BUFFER_PIXEL_SIZE.y)).rgb * weight[i];
 	}
 
-	for(int i = 0; i < 8; i++) {
+	lum = lerp(orig_lum, lum, GaussianBlurStrength);
 
-		
-	}
-
-	// Return color that appears most often in sample set
-
-}	
-
-
-float4 LuminancePass(in float4 pos : SV_Position, in float2 texcoord : TEXCOORD) : COLOR
-{
-	float3 color = tex2D(ReShade::BackBuffer, texcoord).rgb;
-	float3 region_id = tex2D(FilteringSampler, texcoord).rgb;
-
-	float original_lum = (GrayscaleWeights.r * color.r) + (GrayscaleWeights.g * color.g) + (GrayscaleWeights.b * color.b);
-	float new_lum = lum;
-
-	if(distance(region_id, RegionAColor) < 0.0001) {
-		new_lum = float4(RegionALumScale * original_lum, 1.0);
-	}
-
-	if(distance(region_id, RegionBColor) < 0.0001) {
-		new_lum = float4(RegionBLumScale * original_lum, 1.0);
-	}
-
-	return float4(new_lum, new_lum, new_lum, 1.0f);
+	return float4(lum, 1.0f);
 }
 
 float4 TransformationPass(in float4 pos : SV_Position, in float2 texcoord : TEXCOORD) : COLOR
 {
-	float3 region_id = tex2D(RegionIdSampler, texcoord).rgb;
-	float3 filtered_lum = tex2D(FilteringTex, texcoord).rgb;
-
-	if(EnableSegmentationDebug) {
-		return float4(region_id, 1.0f);
-	}
+	float3 color = tex2D(ReShade::BackBuffer, texcoord).rgb;
+	float3 lum = tex2D(LuminanceSampler, texcoord).rgb;
 
 	if(EnableLuminanceDebug) {
-		return float4(filtered_lum, 1.0f);
+		return float4(lum, 1.0f);
 	}
 
-	return float4(color, 1.0f);
+	return float4(color * lum, 1.0f);
 }
 
 technique SemanticEnhancer
@@ -196,20 +162,13 @@ technique SemanticEnhancer
 	{
 		VertexShader = PostProcessVS;
 		PixelShader = SegmentationPass;
-		RenderTarget = RegionIdTex;
+		RenderTarget = LuminanceTex;
 	}
 
 	pass FilteringPass
 	{
 		VertexShader = PostProcessVS;
 		PixelShader = FilteringPass;
-		RenderTarget = FilteringTex;
-	}
-	
-	pass LuminancePass
-	{
-		VertexShader = PostProcessVS;
-		PixelShader = LuminancePass;
 		RenderTarget = LuminanceTex;
 	}
 
