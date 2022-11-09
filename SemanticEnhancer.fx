@@ -83,6 +83,11 @@ uniform float GaussianBlurStrength < __UNIFORM_SLIDER_FLOAT1
 	ui_tooltip = "Adjusts the strength of blue.";
 > = 0.300;
 
+uniform float GaussianBlurOffset < __UNIFORM_SLIDER_FLOAT1
+	ui_min = 0.00; ui_max = 1.00;
+	ui_tooltip = "Additional adjustment for the blur radius. Values less than 1.00 will reduce the radius.";
+> = 1.00;
+
 #include "ReShade.fxh"
 
 texture RegionIdTex {
@@ -127,16 +132,16 @@ float4 FilteringPass(in float4 pos : SV_Position, in float2 texcoord : TEXCOORD)
 {
 	float3 orig_lum = tex2D(LuminanceSampler, texcoord).rgb;
 	float3 lum = tex2D(LuminanceSampler, texcoord).rgb;
-	float offset[4] = { 0.0, 1.1824255238, 3.0293122308, 5.0040701377 };
-	float weight[4] = { 0.39894, 0.2959599993, 0.0045656525, 0.00000149278686458842 };
+	float offset[18] = { 0.0, 1.4953705027, 3.4891992113, 5.4830312105, 7.4768683759, 9.4707125766, 11.4645656736, 13.4584295168, 15.4523059431, 17.4461967743, 19.4661974725, 21.4627427973, 23.4592916956, 25.455844494, 27.4524015179, 29.4489630909, 31.445529535, 33.4421011704 };
+	float weight[18] = { 0.033245, 0.0659162217, 0.0636705814, 0.0598194658, 0.0546642566, 0.0485871646, 0.0420045997, 0.0353207015, 0.0288880982, 0.0229808311, 0.0177815511, 0.013382297, 0.0097960001, 0.0069746748, 0.0048301008, 0.0032534598, 0.0021315311, 0.0013582974 };
 	
 	lum *= weight[0];
 	
 	[loop]
-	for(int i = 1; i < 4; ++i)
+	for(int i = 1; i < 18; ++i)
 	{
-		lum += tex2D(LuminanceSampler, texcoord + float2(0.0, offset[i] * BUFFER_PIXEL_SIZE.y)).rgb * weight[i];
-		lum += tex2D(LuminanceSampler, texcoord - float2(0.0, offset[i] * BUFFER_PIXEL_SIZE.y)).rgb * weight[i];
+		lum += tex2D(LuminanceSampler, texcoord + float2(0.0, offset[i] * BUFFER_PIXEL_SIZE.y) * GaussianBlurOffset).rgb * weight[i];
+		lum += tex2D(LuminanceSampler, texcoord - float2(0.0, offset[i] * BUFFER_PIXEL_SIZE.y) * GaussianBlurOffset).rgb * weight[i];
 	}
 
 	lum = lerp(orig_lum, lum, GaussianBlurStrength);
